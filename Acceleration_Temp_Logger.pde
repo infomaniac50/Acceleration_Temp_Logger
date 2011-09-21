@@ -95,7 +95,7 @@ void blink_led(int blink_delay)
 
 void loop()
 {
-  timer.start_user_code();
+  timer.start_code_block();
 
 
   //get the sensor values
@@ -154,7 +154,7 @@ void loop()
   }
 #endif
 
-  int ms = timer.end_user_code(sample_delay);
+  int ms = timer.end_code_block(sample_delay);
   //delay a little bit to let everything settle
   if (ms == 0)
   {
