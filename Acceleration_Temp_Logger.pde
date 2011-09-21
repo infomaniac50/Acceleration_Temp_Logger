@@ -1,5 +1,3 @@
-#include <SD.h>
-
 
 
 /*
@@ -14,13 +12,15 @@
  analog 5: temperature
  aref: connected to 3.3V
  
- Compatibility: Only tested on the Arduino Mega 2560.
-                Your board may not have enough timers
-                for all the pwm in the program  
-
 */
+#define DEBUG
 
+#ifndef DEBUG
+#include <SD.h>
+#endif
 
+#include <Bounce.h>
+#include <Format.h>
 
 // these constants describe the pins. They won't change:
 const int xpin = A2;                  // x-axis of the accelerometer
@@ -28,43 +28,39 @@ const int ypin = A3;                  // y-axis
 const int zpin = A4;                  // z-axis (only on 3-axis models)
 const int tpin = A5;
 const int ledpin = 13;
-const int vthreshold = 10;            // smallest sensor value before cutoff
-const int sample_delay = 250;          // time to wait in ms between updates
+const float vthreshold = 0.15;         // smallest sensor value before cutoff
+const int sample_delay = 1000;          // time to wait in ms between updates
 const float aref_voltage = 3.3;
 //a = 1024 units of analog range
 //b = 6G's of sensor range
 //c = 1G in analog units
 //c = a / b
-const float gravity = 102.4;               // the magnitude of gravity              
+float zerog = 1.5 * (3.3 / 3.0);
+const int precision = 2;
+const float gravity = 0.330;               // the magnitude of gravity              
 const int chipSelect = 4;
+float rad2deg = 180 / M_PI;
 
-
-int minx = INT_MAX;
-int maxx = 0;
-int miny = INT_MAX;
-int maxy = 0;
-int minz = INT_MAX;
-int maxz = 0;
- 
-int g0x = 0;
-int g0y = 0;
-int g0z = 0;
 void setup()
 {
+  //set analog ref voltage to 3.3V
+  //this will give us the full range on the sensor pins
+  analogReference(EXTERNAL);  
+
   pinMode(53, OUTPUT);
   pinMode(ledpin, OUTPUT);
-
+#ifdef DEBUG
+//  Serial.begin(57600);
+  Serial.begin(9600);
+#else
   if (!SD.begin(chipSelect))
   {
     blink_led(500);
     blink_led(500);
     return;
   }
-  //set analog ref voltage to 3.3V
-  //this will give us the full range on the sensor pins
-  analogReference(EXTERNAL);  
+#endif  
 }
-
 
 void blink_led(int blink_delay)
 {
@@ -73,51 +69,68 @@ void blink_led(int blink_delay)
   digitalWrite(ledpin,LOW);
   delay(blink_delay);
 }
-int adjustscale(int v)
-{
-  return getvthreshold(v - 512);
-}
 
-int getvthreshold(int v)
-{
-  return v < vthreshold && v > -vthreshold ? 0 : v;
-}
-
-int getx()
+float getx()
 {
   //read the x axis from the sensor
-  return adjustscale(analogRead(xpin));
+  return getvoltage(analogRead(xpin));
 }
 
-int gety()
+float gety()
 {
   //read the y axis from the sensor
-  return adjustscale(analogRead(ypin));
+  return getvoltage(analogRead(ypin));
 }
 
-int getz()
+float getz()
 {
   //read the z axis from the sensor
-  return adjustscale(analogRead(zpin));
+  return getvoltage(analogRead(zpin));
 }
 
-int gett()
+float gett()
 {
-  return analogRead(tpin);  
+  return getvoltage(analogRead(tpin));  
+}
+
+float geta2d(float gx, float gy)
+{
+  float a;
+  
+  a = gx * gx;
+  a += gy * gy;
+  
+  return sqrt(a);
 }
 
 //gets the magnitude of the 3d vector
 //the formula is a^2 = x^2 + y^2 + z^2
-long geta(long x, long y, long z)
+float geta3d(float gx, float gy, float gz)
 {
-  long x2 = x * x;
-  long y2 = y * y;
-  long z2 = z * z;
- 
-  //add the vectors together
-  long a2 = x2 + y2 + z2;
-  //square root the sum to get the 3d vector magnitude
-  return sqrt(a2);
+  float a;
+  
+  //use floating point multiply-add cpu func
+  //sometimes we get better precision
+  a = gx * gx;
+  a = fma(gy,gy,a);
+  a = fma(gz,gz,a);
+  
+  return sqrt(a);
+}
+
+float getrho(float ax, float ay, float az)
+{
+  return atan2(ax, geta2d(ay, az)) * rad2deg;  
+}
+
+float getphi(float ax, float ay, float az)
+{
+  return atan2(ay, geta2d(ax, az)) * rad2deg;  
+}
+
+float gettheta(float ax, float ay, float az)
+{
+  return atan2(geta2d(ay, ax), az) * rad2deg;
 }
 
 float getvoltage(int reading)
@@ -128,76 +141,123 @@ float getvoltage(int reading)
   return voltage;
 }
 
-float getformatted(int v)
+float getgravity(float voltage)
+{  
+  //minus the zero g bias 
+  //then divide by mv/g
+  //which when Vs = 3.3V, V/g = 0.330
+  float gv = (voltage - zerog) / gravity;
+  
+  //minus the null zone
+  getthreshold(&gv);
+  
+  return gv;
+}
+
+void gettemperature(float voltage,float* tempc,float* tempf)
 {
-  //ADXL sensor only reads +-3G's
-  return (float)v / gravity;
+  //converting from 10 mv per degree with 500 mV offset
+  //to degrees ((volatge - 500mV) times 100)
+  *tempc = (voltage - 0.5) * 100 ;  
+  // now convert to Fahrenheight
+  *tempf = (*tempc * 9.0 / 5.0) + 32.0;  
 }
 
 //gets whether the device is in free fall
-boolean getfreefall(int x, int y, int z)
-{
-  //if all three vectors read zero then return true, otherwise; false.
-  return x == 0 && y == 0 && z == 0;
-}
+//boolean getfreefall(float gx, float gy, float gz)
+//{
+//  //if all three vectors read zero then return true, otherwise; false.
+//  return gx == 0.0 && gy == 0.0 && gz == 0.0;
+//}
+//
+//float fmap(float x, float in_min, float in_max, float out_min, float out_max)
+//{
+//  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+//}
 
-float fmap(float x, float in_min, float in_max, float out_min, float out_max)
+void getthreshold(float* gv)
 {
-  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
-
-void autoZeroCalibration(int pfx, int pfy, int pfz)
-{
-  if ((pfx < minx)||(pfy < miny)||(pfz < minz)||(pfx > maxx)||(pfy > maxy)||(pfz > maxz)) {
-    // autozero calibration
-    if (pfx < minx) minx = pfx;
-    if (pfy < miny) miny = pfy;
-    if (pfz < minz) minz = pfz;
-     
-    if (pfx > maxx) maxx = pfx;
-    if (pfy > maxy) maxy = pfy;
-    if (pfz > maxz) maxz = pfz;
-     
-    g0x = ((maxx - minx)/2)+minx;
-    g0y = ((maxy - miny)/2)+miny;
-    g0z = ((maxz - minz)/2)+minz;
+  if (*gv < vthreshold && *gv > -vthreshold)
+  {
+    *gv = 0.0;
   }
 }
 
+
+
+unsigned long start_time;
+unsigned long end_time;
+
+void start_calc_delay()
+{
+  start_time = millis();
+}
+
+int end_calc_delay(int sample_delay)
+{
+  end_time = millis();
+  int calc_delay = sample_delay -  (int)(end_time - start_time);
+    
+  return calc_delay > 0 ? calc_delay : 0;
+}
+
+
+
 void loop()
 {
-
+  start_calc_delay();
   //get the sensor values
-  int x = getx();
-  int y = gety();
-  int z = getz();
-
-  //calculate the vector magnitude
-  int a = geta(x,y,z);
+  float vx = getx();
+  float vy = gety();
+  float vz = getz();
+  float vt = gett();  
   
-  int t = gett();
   
-  //converting from 10 mv per degree wit 500 mV offset
-  //to degrees ((volatge - 500mV) times 100)
-//  float temperatureC = (t - 0.5) * 100 ;  
-//  // now convert to Fahrenheight
-//  float temperatureF = (temperatureC * 9.0 / 5.0) + 32.0;
-//  float accelX = getformatted(x);
-//  float accelY = getformatted(y);
-//  float accelZ = getformatted(z);
-//  float accelA = getformatted(a);
+  float tempc;
+  float tempf;  
+  float gx;
+  float gy;
+  float gz;
+  float ga;
+  float rho;
+  float phi;
+  float theta;
+  
+  gettemperature(vt, &tempc, &tempf);
+  gx = getgravity(vx);
+  gy = getgravity(vy);
+  gz = getgravity(vz);
+  
+  //calculate the polar coordinates
+  ga =    geta3d(gx,gy,gz);
+  rho =   getrho(gx,gy,gz);
+  phi =   getphi(gx,gy,gz);
+  theta = gettheta(gx,gy,gz);
   String dataString = "";
-
-  dataString += String(t);
+  int string_width;
+  
+  //temperature precision is +-1 degree Celsius
+  dataString += formatFloat(tempc, 0, &string_width);
   dataString += ",";
-  dataString += String(x);
+  dataString += formatFloat(tempf, 0, &string_width);
   dataString += ",";
-  dataString += String(y);
-  dataString += ",";  
-  dataString += String(z);
-  dataString += ",";  
-  dataString += String(a);
+  dataString += formatFloat(gx, precision, &string_width);
+  dataString += ",";
+  dataString += formatFloat(gy, precision, &string_width);
+  dataString += ",";
+  dataString += formatFloat(gz, precision, &string_width);
+  dataString += ",";
+  dataString += formatFloat(ga, precision, &string_width);
+  dataString += ",";
+  dataString += formatFloat(rho, precision, &string_width);
+  dataString += ",";
+  dataString += formatFloat(phi, precision, &string_width);
+  dataString += ",";
+  dataString += formatFloat(theta, precision, &string_width);
 
+#ifdef DEBUG
+  Serial.println(dataString);
+#else
   File dataFile = SD.open("datalog.txt", FILE_WRITE);
   
   if (dataFile)
@@ -205,7 +265,14 @@ void loop()
     dataFile.println(dataString);
     dataFile.close();
   }
+#endif
 
+  int ms = end_calc_delay(sample_delay);
   //delay a little bit to let everything settle
-  delay(sample_delay);
+  if (ms == 0)
+  {
+    blink_led(25);
+  }
+  
+  delay(ms);
 }
