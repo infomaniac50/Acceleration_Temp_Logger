@@ -25,7 +25,6 @@ char filename[] = "LOGGER00.CSV";
 #ifndef MINIMAL
 #include <ADXL335.h>
 #include <TMP36.h>
-#include <Bounce.h>
 #include <Format.h>
 #endif
 
@@ -111,7 +110,7 @@ void loop()
   //temperature precision is +-1 degree Celsius
   dataString += formatFloat(temp.getCelsius(), 0, &string_width);
   dataString += ",";
-  dataString += formatFloat(temp.getFarenheight(), 0, &string_width);
+  dataString += formatFloat(temp.getFahrenheit(), 0, &string_width);
   dataString += ",";
   dataString += formatFloat(accel.getX(), precision, &string_width);
   dataString += ",";
